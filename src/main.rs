@@ -1,20 +1,22 @@
 use std::{
-    fs,
-    io::Write,
+    env, fs,
+    io::{self, BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
+    str::FromStr,
 };
 
 use anyhow::{Context, Result, bail};
 use base64::{Engine, engine::general_purpose::STANDARD};
-use clap::{Parser, ValueEnum};
-use hf_hub::api::sync::Api;
+use clap::{Args, Parser, Subcommand, ValueEnum};
+use dirs::home_dir;
+use hf_hub::{Repo, RepoType, api::sync::Api};
 use rustc_hash::FxHashMap;
 use serde_json::Value;
 use tempfile::Builder;
 use tiktoken_rs::{CoreBPE, Rank};
 use tokenizers::Tokenizer;
+use walkdir::WalkDir;
 
-const DEFAULT_BUDGET: usize = 32_768;
 const USER_MESSAGE_BEGIN: &str = "## My request for Codex:";
 const HIDDEN_CONTEXT_TAGS: [&str; 7] = [
     "<user_instructions>",
@@ -38,28 +40,140 @@ const KIMI_PATTERN: &str = concat!(
     about = "Prepare a bounded session handoff for another coding agent"
 )]
 struct Cli {
-    /// Codex or Claude session JSONL file
-    session: PathBuf,
+    #[command(subcommand)]
+    command: Command,
+}
 
-    /// Authoritative task for the receiving agent
-    #[arg(long)]
-    task: String,
+#[derive(Subcommand)]
+enum Command {
+    /// Create a handoff from an explicit session JSONL file
+    Pack {
+        /// Codex or Claude session JSONL file
+        session: PathBuf,
+
+        #[command(flatten)]
+        options: HandoffOptions,
+    },
+
+    /// Infer the current session JSONL from the host agent environment
+    Infer(HandoffOptions),
+
+    /// List supported destination models and their budgets
+    Models,
+}
+
+#[derive(Args)]
+struct HandoffOptions {
+    /// Authoritative task for the receiving agent (reads stdin when omitted)
+    #[arg(long, conflicts_with = "task_file")]
+    task: Option<String>,
+
+    /// Read the authoritative task from a file
+    #[arg(long, value_name = "PATH", conflicts_with = "task")]
+    task_file: Option<PathBuf>,
 
     /// Tokenizer profile used for the handoff budget
     #[arg(long, value_enum, default_value = "swe-1.7")]
     model: Model,
 
-    /// Maximum tokens for the complete handoff
-    #[arg(long, default_value_t = DEFAULT_BUDGET)]
-    budget: usize,
+    /// Maximum handoff size as tokens or a model-context percentage (for example, 12.5%)
+    #[arg(long, value_name = "TOKENS|PERCENT")]
+    budget: Option<Budget>,
 }
 
-#[derive(Clone, Copy, ValueEnum)]
+#[derive(Clone, Copy, Debug, ValueEnum)]
 enum Model {
     #[value(name = "swe-1.7")]
     Swe17,
     #[value(name = "glm-5.2")]
     Glm52,
+}
+
+impl Model {
+    const ALL: [Self; 2] = [Self::Swe17, Self::Glm52];
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Swe17 => "swe-1.7",
+            Self::Glm52 => "glm-5.2",
+        }
+    }
+
+    fn context_window(self) -> usize {
+        match self {
+            Self::Swe17 => 262_144,
+            Self::Glm52 => 1_048_576,
+        }
+    }
+
+    fn default_budget(self) -> usize {
+        match self {
+            Self::Swe17 => 32_768,
+            Self::Glm52 => 65_536,
+        }
+    }
+
+    fn tokenizer_name(self) -> &'static str {
+        match self {
+            Self::Swe17 => "Kimi K2.7 proxy (+10%)",
+            Self::Glm52 => "GLM-5.2",
+        }
+    }
+
+    fn tokenizer_repo(self) -> &'static str {
+        match self {
+            Self::Swe17 => "moonshotai/Kimi-K2.7-Code",
+            Self::Glm52 => "zai-org/GLM-5.2",
+        }
+    }
+
+    fn tokenizer_revision(self) -> &'static str {
+        match self {
+            Self::Swe17 => "74797c9c62378b951a1f6fcf5c4631024e9b8bef",
+            Self::Glm52 => "b4734de4facf877f85769a911abafc5283eab3d9",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Budget {
+    Tokens(usize),
+    Percentage(f64),
+}
+
+impl Budget {
+    fn resolve(self, model: Model) -> usize {
+        match self {
+            Self::Tokens(tokens) => tokens,
+            Self::Percentage(percent) => {
+                ((model.context_window() as f64) * percent / 100.0).floor() as usize
+            }
+        }
+    }
+}
+
+impl FromStr for Budget {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if let Some(percent) = value.strip_suffix('%') {
+            let percent = percent
+                .parse::<f64>()
+                .map_err(|_| "percentage must be a number followed by %".to_string())?;
+            if !percent.is_finite() || !(0.0 < percent && percent <= 100.0) {
+                return Err("percentage must be greater than 0% and at most 100%".to_string());
+            }
+            return Ok(Self::Percentage(percent));
+        }
+
+        let tokens = value
+            .parse::<usize>()
+            .map_err(|_| "budget must be a token count or percentage such as 12.5%".to_string())?;
+        if tokens == 0 {
+            return Err("token budget must be greater than zero".to_string());
+        }
+        Ok(Self::Tokens(tokens))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -76,18 +190,21 @@ enum TokenCounter {
 impl TokenCounter {
     fn load(model: Model) -> Result<Self> {
         let client = Api::new().context("failed to initialize the Hugging Face client")?;
+        let repo = client.repo(Repo::with_revision(
+            model.tokenizer_repo().to_string(),
+            RepoType::Model,
+            model.tokenizer_revision().to_string(),
+        ));
 
         match model {
             Model::Swe17 => {
-                let path = client
-                    .model("moonshotai/Kimi-K2.7-Code".to_string())
+                let path = repo
                     .get("tiktoken.model")
                     .context("failed to download the Kimi K2.7 tokenizer for SWE-1.7")?;
                 Ok(Self::Swe17(load_kimi_tokenizer(&path)?))
             }
             Model::Glm52 => {
-                let path = client
-                    .model("zai-org/GLM-5.2".to_string())
+                let path = repo
                     .get("tokenizer.json")
                     .context("failed to download the GLM-5.2 tokenizer")?;
                 let tokenizer = Tokenizer::from_file(&path)
@@ -114,13 +231,38 @@ impl TokenCounter {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    if cli.budget == 0 {
-        bail!("--budget must be greater than zero");
+
+    match cli.command {
+        Command::Models => {
+            print_models();
+            return Ok(());
+        }
+        Command::Pack { session, options } => create_handoff(&session, options)?,
+        Command::Infer(options) => create_handoff(&infer_session_path()?, options)?,
     }
 
-    let turns = parse_session(&cli.session)?;
-    let counter = TokenCounter::load(cli.model)?;
-    let handoff = pack_handoff(&turns, cli.task.trim(), cli.budget, &counter)?;
+    Ok(())
+}
+
+fn create_handoff(session: &Path, options: HandoffOptions) -> Result<()> {
+    let task = read_task(options.task, options.task_file, io::stdin())?;
+    let budget = options
+        .budget
+        .map(|budget| budget.resolve(options.model))
+        .unwrap_or_else(|| options.model.default_budget());
+    if budget == 0 {
+        bail!("the resolved budget is zero tokens");
+    }
+    if budget > options.model.context_window() {
+        bail!(
+            "the {budget}-token budget exceeds the {}-token context window for {}",
+            options.model.context_window(),
+            options.model.name()
+        );
+    }
+    let turns = parse_session(session)?;
+    let counter = TokenCounter::load(options.model)?;
+    let handoff = pack_handoff(&turns, task.trim(), budget, &counter)?;
 
     let mut file = Builder::new().prefix("xfer-").suffix(".md").tempfile()?;
     file.write_all(handoff.as_bytes())?;
@@ -132,6 +274,139 @@ fn main() -> Result<()> {
     println!("{}", path.display());
 
     Ok(())
+}
+
+fn read_task(
+    task: Option<String>,
+    task_file: Option<PathBuf>,
+    mut stdin: impl Read,
+) -> Result<String> {
+    let task = match (task, task_file) {
+        (Some(task), None) => task,
+        (None, Some(path)) => fs::read_to_string(&path)
+            .with_context(|| format!("failed to read task file: {}", path.display()))?,
+        (None, None) => {
+            let mut task = String::new();
+            stdin.read_to_string(&mut task)?;
+            task
+        }
+        (Some(_), Some(_)) => unreachable!("clap rejects conflicting task inputs"),
+    };
+
+    if task.trim().is_empty() {
+        bail!("task is empty; use --task, --task-file, or pipe it through stdin");
+    }
+    Ok(task)
+}
+
+fn print_models() {
+    println!("MODEL\tCONTEXT\tDEFAULT BUDGET\tTOKENIZER\tREVISION");
+    for model in Model::ALL {
+        println!(
+            "{}\t{}\t{}\t{}\t{}",
+            model.name(),
+            model.context_window(),
+            model.default_budget(),
+            model.tokenizer_name(),
+            model.tokenizer_revision()
+        );
+    }
+}
+
+fn infer_session_path() -> Result<PathBuf> {
+    if let Some(session_id) = env::var("CLAUDE_CODE_SESSION_ID")
+        .ok()
+        .filter(|value| !value.is_empty())
+    {
+        let root = env::var_os("CLAUDE_CONFIG_DIR")
+            .map(PathBuf::from)
+            .or_else(|| home_dir().map(|home| home.join(".claude")))
+            .context("could not resolve the Claude configuration directory")?
+            .join("projects");
+        return find_session_file(&root, &session_id, SessionKind::Claude);
+    }
+
+    if let Some(thread_id) = env::var("CODEX_THREAD_ID")
+        .ok()
+        .filter(|value| !value.is_empty())
+    {
+        let root = env::var_os("CODEX_HOME")
+            .map(PathBuf::from)
+            .or_else(|| home_dir().map(|home| home.join(".codex")))
+            .context("could not resolve CODEX_HOME")?
+            .join("sessions");
+        return find_session_file(&root, &thread_id, SessionKind::Codex);
+    }
+
+    bail!(
+        "could not infer the current session; CLAUDE_CODE_SESSION_ID and CODEX_THREAD_ID are both unset"
+    )
+}
+
+#[derive(Clone, Copy)]
+enum SessionKind {
+    Claude,
+    Codex,
+}
+
+fn find_session_file(root: &Path, session_id: &str, kind: SessionKind) -> Result<PathBuf> {
+    let matches = WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_type().is_file())
+        .map(|entry| entry.into_path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "jsonl")
+        })
+        .filter(|path| match kind {
+            SessionKind::Claude => {
+                path.file_stem().and_then(|name| name.to_str()) == Some(session_id)
+            }
+            SessionKind::Codex => path
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.ends_with(session_id)),
+        })
+        .filter(|path| session_file_matches(path, session_id, kind))
+        .collect::<Vec<_>>();
+
+    match matches.as_slice() {
+        [path] => Ok(path.clone()),
+        [] => bail!(
+            "no session JSONL with id {session_id} was found under {}",
+            root.display()
+        ),
+        _ => bail!(
+            "multiple session JSONL files with id {session_id} were found under {}",
+            root.display()
+        ),
+    }
+}
+
+fn session_file_matches(path: &Path, session_id: &str, kind: SessionKind) -> bool {
+    let Ok(file) = fs::File::open(path) else {
+        return false;
+    };
+
+    BufReader::new(file)
+        .lines()
+        .map_while(std::result::Result::ok)
+        .any(|line| {
+            let Ok(value) = serde_json::from_str::<Value>(&line) else {
+                return false;
+            };
+            match kind {
+                SessionKind::Claude => {
+                    value.get("sessionId").and_then(Value::as_str) == Some(session_id)
+                }
+                SessionKind::Codex => {
+                    value.get("type").and_then(Value::as_str) == Some("session_meta")
+                        && value.pointer("/payload/id").and_then(Value::as_str) == Some(session_id)
+                }
+            }
+        })
 }
 
 fn load_kimi_tokenizer(path: &Path) -> Result<CoreBPE> {
@@ -445,6 +720,67 @@ You are working as a subagent for another coding agent. Inspect the current repo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn parses_and_resolves_token_and_percentage_budgets() {
+        assert_eq!("65536".parse::<Budget>().unwrap(), Budget::Tokens(65_536));
+        assert_eq!("12.5%".parse::<Budget>().unwrap(), Budget::Percentage(12.5));
+        assert_eq!(Budget::Percentage(12.5).resolve(Model::Swe17), 32_768);
+        assert_eq!(Budget::Percentage(6.25).resolve(Model::Glm52), 65_536);
+        assert!("0%".parse::<Budget>().is_err());
+        assert!("101%".parse::<Budget>().is_err());
+    }
+
+    #[test]
+    fn reads_task_from_stdin_when_no_flag_is_set() {
+        let task = read_task(None, None, Cursor::new("implement it\n")).unwrap();
+        assert_eq!(task, "implement it\n");
+        assert!(read_task(None, None, Cursor::new("\n")).is_err());
+    }
+
+    #[test]
+    fn reads_task_from_a_file() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        write!(file, "task from file").unwrap();
+
+        let task = read_task(None, Some(file.path().to_path_buf()), Cursor::new("")).unwrap();
+
+        assert_eq!(task, "task from file");
+    }
+
+    #[test]
+    fn finds_codex_and_claude_sessions_by_embedded_id() {
+        let root = tempfile::tempdir().unwrap();
+        let nested = root.path().join("2026/08/16");
+        fs::create_dir_all(&nested).unwrap();
+
+        let codex_path = nested.join("rollout-codex-id.jsonl");
+        fs::write(
+            &codex_path,
+            serde_json::json!({
+                "type": "session_meta",
+                "payload": {"id": "codex-id"}
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let claude_path = nested.join("claude-id.jsonl");
+        fs::write(
+            &claude_path,
+            serde_json::json!({"type": "user", "sessionId": "claude-id"}).to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            find_session_file(root.path(), "codex-id", SessionKind::Codex).unwrap(),
+            codex_path
+        );
+        assert_eq!(
+            find_session_file(root.path(), "claude-id", SessionKind::Claude).unwrap(),
+            claude_path
+        );
+    }
 
     #[test]
     fn extracts_only_visible_codex_messages() {

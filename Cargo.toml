@@ -11,9 +11,11 @@ repository = "https://github.com/mkusaka/xfer"
 anyhow = "1.0"
 base64 = "0.22"
 clap = { version = "4.6", features = ["derive"] }
+dirs = "6.0"
 hf-hub = { version = "0.4", default-features = false, features = ["ureq"] }
 rustc-hash = "2.1"
 serde_json = "1.0"
 tempfile = "3.27"
 tiktoken-rs = "0.12"
 tokenizers = { version = "0.23", default-features = false, features = ["fancy-regex"] }
+walkdir = "2.5"

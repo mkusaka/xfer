@@ -1,0 +1,58 @@
+name: Model profiles
+
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch: {}
+
+permissions: {}
+
+jobs:
+  verify:
+    name: Verify model metadata and tokenizers
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions: {}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: stable
+      - name: Verify published context windows
+        run: |
+          swe_metadata=$(curl --fail --silent --show-error --location \
+            https://huggingface.co/api/models/moonshotai/Kimi-K2.7-Code)
+          glm_metadata=$(curl --fail --silent --show-error --location \
+            https://huggingface.co/api/models/zai-org/GLM-5.2)
+          swe_revision=$(jq -r .sha <<< "$swe_metadata")
+          glm_revision=$(jq -r .sha <<< "$glm_metadata")
+          swe_context=$(curl --fail --silent --show-error --location \
+            "https://huggingface.co/moonshotai/Kimi-K2.7-Code/raw/$swe_revision/generation_config.json" \
+            | jq -r .max_length)
+          glm_context=$(curl --fail --silent --show-error --location \
+            "https://huggingface.co/zai-org/GLM-5.2/raw/$glm_revision/config.json" \
+            | jq -r .max_position_embeddings)
+          models=$(cargo run --quiet --locked -- models)
+
+          grep -Fq $'swe-1.7\t'"$swe_context"$'\t' <<< "$models"
+          grep -Fq "$swe_revision" <<< "$models"
+          grep -Fq $'glm-5.2\t'"$glm_context"$'\t' <<< "$models"
+          grep -Fq "$glm_revision" <<< "$models"
+        shell: bash
+      - name: Verify tokenizer profiles
+        run: |
+          session_file="$RUNNER_TEMP/session.jsonl"
+          printf '%s\n' \
+            '{"type":"event_msg","payload":{"type":"user_message","message":"Continue the task"}}' \
+            > "$session_file"
+
+          for model in swe-1.7 glm-5.2; do
+            cargo run --quiet --locked -- pack "$session_file" \
+              --model "$model" \
+              --task "Verify the tokenizer profile"
+          done
+        shell: bash
