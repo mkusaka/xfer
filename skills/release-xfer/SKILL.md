@@ -41,7 +41,7 @@ gh run list --repo mkusaka/xfer --workflow Release --limit 10 \
 gh run watch <run-id> --repo mkusaka/xfer --exit-status
 ```
 
-The workflow verifies Rust checks, creates a draft release, packages native Apple Silicon and Intel archives with both skills, publishes the release, and dispatches `Formula/xfer.rb` to `mkusaka/homebrew-tap`.
+The workflow verifies Rust checks, creates a draft release, packages native Apple Silicon and Intel archives with all repository skills, publishes the release, and dispatches `Formula/xfer.rb` to `mkusaka/homebrew-tap`.
 
 ## Verify delivery
 

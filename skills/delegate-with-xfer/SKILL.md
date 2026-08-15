@@ -1,6 +1,6 @@
 ---
 name: delegate-with-xfer
-description: Prepare a token-bounded handoff from the current Codex or Claude session and delegate a task to another coding agent. Use when the user asks to pass current-session context to Devin CLI or another local agent, create a handoff prompt file, or continue work in a destination model such as SWE-1.7 or GLM-5.2.
+description: Prepare a token-bounded handoff from the current Codex or Claude session for another coding agent. Use when the user asks to create a handoff prompt file, pass current-session context to a local agent, or continue work in a destination model such as SWE-1.7 or GLM-5.2 without requesting a Devin-specific delegation workflow.
 ---
 
 # Delegate with xfer
@@ -15,11 +15,7 @@ handoff_path=$(printf '%s' "$DELEGATED_TASK" | xfer infer --model swe-1.7)
 
 Use `xfer pack "$SESSION_JSONL"` only when the session file is explicitly known. Use `--task-file` for an existing task document and `--budget 12.5%` when the handoff should occupy a percentage of the selected model's context.
 
-4. Pass the file to the requested agent. For Devin CLI, use its prompt-file option rather than copying the Markdown through shell interpolation:
-
-```bash
-devin --prompt-file "$handoff_path"
-```
+4. Pass the file through the receiving agent's prompt-file or equivalent input option rather than copying the Markdown through shell interpolation.
 
 5. Treat the receiving agent's working-tree diff and check results as the source of truth. Inspect them before accepting the work.
 

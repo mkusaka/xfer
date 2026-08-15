@@ -113,7 +113,7 @@ jobs:
           target/release/xfer --version
           mkdir -p release-root/skills
           cp target/release/xfer release-root/xfer
-          cp -R skills/delegate-with-xfer skills/release-xfer release-root/skills/
+          cp -R skills/. release-root/skills/
           asset_name="xfer-${VERSION}-${ARCHIVE_SUFFIX}.tar.gz"
           tar -C release-root -czf "$asset_name" .
           sha256=$(shasum -a 256 "$asset_name" | awk '{print $1}')

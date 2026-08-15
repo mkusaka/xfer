@@ -72,7 +72,13 @@ After the first tagged release, macOS packages are also published to `mkusaka/ho
 brew install mkusaka/tap/xfer
 ```
 
-The repository includes two agent skills. List or install them with:
+The repository includes three agent skills:
+
+- `delegate-with-xfer` prepares a generic bounded handoff.
+- `delegate-to-devin` runs Devin CLI as a local subagent and verifies its work.
+- `release-xfer` publishes xfer and updates its Homebrew tap.
+
+List or install them with:
 
 ```bash
 npx -y skills add https://github.com/mkusaka/xfer --list

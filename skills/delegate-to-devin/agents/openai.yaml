@@ -1,0 +1,4 @@
+interface:
+  display_name: "Delegate to Devin"
+  short_description: "Use Devin CLI as a local implementation subagent"
+  default_prompt: "Use $delegate-to-devin to delegate this task to Devin CLI and verify its work."
