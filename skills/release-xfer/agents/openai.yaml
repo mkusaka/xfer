@@ -1,0 +1,4 @@
+interface:
+  display_name: "Release xfer"
+  short_description: "Release xfer to GitHub and Homebrew safely"
+  default_prompt: "Use $release-xfer to publish the next xfer release."

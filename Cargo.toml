@@ -1,0 +1,19 @@
+[package]
+name = "xfer"
+version = "0.1.0"
+edition = "2024"
+description = "Prepare a bounded session handoff for another coding agent"
+license = "MIT"
+homepage = "https://github.com/mkusaka/xfer"
+repository = "https://github.com/mkusaka/xfer"
+
+[dependencies]
+anyhow = "1.0"
+base64 = "0.22"
+clap = { version = "4.6", features = ["derive"] }
+hf-hub = { version = "0.4", default-features = false, features = ["ureq"] }
+rustc-hash = "2.1"
+serde_json = "1.0"
+tempfile = "3.27"
+tiktoken-rs = "0.12"
+tokenizers = { version = "0.23", default-features = false, features = ["fancy-regex"] }

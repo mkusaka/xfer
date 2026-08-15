@@ -1,0 +1,4 @@
+interface:
+  display_name: "Delegate with xfer"
+  short_description: "Prepare bounded context for another coding agent"
+  default_prompt: "Use $delegate-with-xfer to hand this task to another coding agent."
