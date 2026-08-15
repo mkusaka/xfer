@@ -170,11 +170,12 @@ jobs:
         env:
           VERSION: ${{ needs.release.outputs.version }}
         run: |
-          export FORMULA_PATH="$RUNNER_TEMP/xfer.rb"
-          export DARWIN_ARM64_URL=$(jq -r 'select(.archive_suffix == "darwin-arm64") | .asset_url' release-metadata-*.json)
-          export DARWIN_ARM64_SHA256=$(jq -r 'select(.archive_suffix == "darwin-arm64") | .sha256' release-metadata-*.json)
-          export DARWIN_X64_URL=$(jq -r 'select(.archive_suffix == "darwin-x64") | .asset_url' release-metadata-*.json)
-          export DARWIN_X64_SHA256=$(jq -r 'select(.archive_suffix == "darwin-x64") | .sha256' release-metadata-*.json)
+          FORMULA_PATH="$RUNNER_TEMP/xfer.rb"
+          DARWIN_ARM64_URL=$(jq -r 'select(.archive_suffix == "darwin-arm64") | .asset_url' release-metadata-*.json)
+          DARWIN_ARM64_SHA256=$(jq -r 'select(.archive_suffix == "darwin-arm64") | .sha256' release-metadata-*.json)
+          DARWIN_X64_URL=$(jq -r 'select(.archive_suffix == "darwin-x64") | .asset_url' release-metadata-*.json)
+          DARWIN_X64_SHA256=$(jq -r 'select(.archive_suffix == "darwin-x64") | .sha256' release-metadata-*.json)
+          export FORMULA_PATH DARWIN_ARM64_URL DARWIN_ARM64_SHA256 DARWIN_X64_URL DARWIN_X64_SHA256
           cp packaging/homebrew/xfer.rb "$FORMULA_PATH"
           ruby <<'RUBY'
           path = ENV.fetch("FORMULA_PATH")
