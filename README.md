@@ -6,7 +6,7 @@ context, then selects the largest contiguous suffix of complete turns that fits 
 
 The generated Markdown is printed to standard output by default. Pass `--write-tmpfile` to persist
 it in the operating system's temporary directory and print the path instead. `xfer` does not start
-the receiving agent or perform semantic summarization.
+the receiving agent or call a model itself.
 
 ## Usage
 
@@ -45,6 +45,37 @@ handoff_path=$(xfer pack /path/to/session.jsonl \
   --task "Implement the requested change")
 ```
 
+## External compaction
+
+`compact-prompt` prepares the filtered session transcript and a checkpoint-summary instruction for
+an external model. Omit the optional session path to infer the current Codex or Claude session.
+
+```bash
+compact_prompt_path=$(xfer compact-prompt \
+  --model swe-1.7 \
+  --write-tmpfile)
+
+summary_path=$(mktemp)
+devin --print \
+  --permission-mode auto \
+  --model swe-1.7 \
+  --prompt-file "$compact_prompt_path" \
+  > "$summary_path"
+
+handoff_path=$(printf '%s\n' "Implement the requested change" \
+  | xfer infer \
+      --model swe-1.7 \
+      --summary-file "$summary_path" \
+      --write-tmpfile)
+```
+
+The compaction prompt includes the largest contiguous recent transcript that fits its budget. Its
+default budget is 75% of the selected model's context window, leaving room for the external model's
+summary. An exact token count or percentage can be supplied with `--budget`. When `--summary-file`
+is present, the final handoff contains the summary, the newest user messages that fit, and the
+authoritative delegated task. Assistant answers are not repeated because the summary already
+captures their progress and decisions.
+
 List the supported destination models, context windows, default budgets, and tokenizer profiles:
 
 ```bash
@@ -52,7 +83,8 @@ xfer models
 ```
 
 SWE-1.7 defaults to a 32,768-token handoff and is counted with the Kimi K2.7 tokenizer plus a 10%
-safety margin. GLM-5.2 defaults to 65,536 tokens and uses its published tokenizer directly.
+safety margin. GLM-5.2 defaults to a 65,536-token handoff and uses its published tokenizer directly.
+Compaction prompts default to 75% of each model's context window.
 Tokenizer files are pinned to verified Hugging Face revisions, downloaded on first use, and then
 read from the local cache. A weekly workflow detects upstream model metadata changes and verifies
 that both tokenizer profiles still load. Because SWE-1.7 does not publish a separate context or

@@ -56,5 +56,10 @@ jobs:
               --task "Verify the tokenizer profile" \
               --write-tmpfile)
             test -s "$handoff_path"
+
+            compaction_path=$(cargo run --quiet --locked -- compact-prompt "$session_file" \
+              --model "$model" \
+              --write-tmpfile)
+            test -s "$compaction_path"
           done
         shell: bash

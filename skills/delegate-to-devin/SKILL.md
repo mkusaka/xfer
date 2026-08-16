@@ -1,6 +1,6 @@
 ---
 name: delegate-to-devin
-description: Delegate a scoped implementation, investigation, test, or review from the current Codex or Claude Code session to local Devin CLI using an xfer handoff, then verify Devin's working-tree changes and checks. Use when the user asks to use Devin CLI as a subagent or worker, have Devin implement or inspect something with the current conversation context, or hand work from Codex or Claude Code to Devin.
+description: Delegate a scoped implementation, investigation, test, or review from the current Codex or Claude Code session to local Devin CLI using an externally compacted xfer handoff, then verify Devin's working-tree changes and checks. Use when the user asks to use Devin CLI as a subagent or worker, have Devin implement or inspect something with the current conversation context, or hand work from Codex or Claude Code to Devin.
 ---
 
 # Delegate to Devin
@@ -23,16 +23,32 @@ Require the exact Devin model to appear in `devin models list`. Do not pair xfer
 
 ## Run Devin
 
-Generate the handoff from the current host session. Use `xfer pack` only when the exact session path is already known.
+First ask a read-only Devin invocation to summarize the filtered session. The compaction prompt forbids repository inspection and execution; do not add implementation instructions to this invocation.
 
 ```bash
+compact_prompt_path=$(xfer compact-prompt \
+  --model swe-1.7 \
+  --write-tmpfile)
+summary_path=$(mktemp)
+devin --print \
+  --permission-mode auto \
+  --model swe-1.7 \
+  --prompt-file "$compact_prompt_path" \
+  > "$summary_path"
+test -s "$summary_path"
+
 handoff_path=$(printf '%s' "$delegated_task" \
-  | xfer infer --model swe-1.7 --write-tmpfile)
+  | xfer infer \
+      --model swe-1.7 \
+      --summary-file "$summary_path" \
+      --write-tmpfile)
 devin --print \
   --permission-mode smart \
   --model swe-1.7 \
   --prompt-file "$handoff_path"
 ```
+
+Use the same model profile for compaction and implementation. Use `xfer compact-prompt "$SESSION_JSONL"` and `xfer pack "$SESSION_JSONL"` only when the exact session path is already known.
 
 Use `smart` for implementation because it permits workspace edits and safety-checks other actions. Use `auto` for read-only investigation. Never switch to `dangerous` or disable workspace trust unless the user explicitly authorizes it. If a required action is denied, report the denial or narrow the task instead of silently broadening permissions.
 
