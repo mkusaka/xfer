@@ -1,6 +1,6 @@
 [package]
 name = "xfer"
-version = "0.1.0"
+version = "0.0.1"
 edition = "2024"
 description = "Prepare a bounded session handoff for another coding agent"
 license = "MIT"
