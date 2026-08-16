@@ -4,9 +4,9 @@
 It keeps user messages and final assistant answers, removes tool trajectories and hidden runtime
 context, then selects the largest contiguous suffix of complete turns that fits the budget.
 
-The generated file is persisted in the operating system's temporary directory and its path is
-printed to standard output. `xfer` does not start the receiving agent or perform semantic
-summarization.
+The generated Markdown is printed to standard output by default. Pass `--write-tmpfile` to persist
+it in the operating system's temporary directory and print the path instead. `xfer` does not start
+the receiving agent or perform semantic summarization.
 
 ## Usage
 
@@ -32,6 +32,17 @@ The task can instead come from standard input or a file:
 ```bash
 printf '%s\n' "Implement the requested change" | xfer infer
 xfer infer --task-file /path/to/task.md
+```
+
+Both `infer` and `pack` support temporary-file output for tools that accept a prompt file:
+
+```bash
+handoff_path=$(printf '%s\n' "Implement the requested change" \
+  | xfer infer --write-tmpfile)
+
+handoff_path=$(xfer pack /path/to/session.jsonl \
+  --write-tmpfile \
+  --task "Implement the requested change")
 ```
 
 List the supported destination models, context windows, default budgets, and tokenizer profiles:

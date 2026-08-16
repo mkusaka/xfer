@@ -26,7 +26,8 @@ Require the exact Devin model to appear in `devin models list`. Do not pair xfer
 Generate the handoff from the current host session. Use `xfer pack` only when the exact session path is already known.
 
 ```bash
-handoff_path=$(printf '%s' "$delegated_task" | xfer infer --model swe-1.7)
+handoff_path=$(printf '%s' "$delegated_task" \
+  | xfer infer --model swe-1.7 --write-tmpfile)
 devin --print \
   --permission-mode smart \
   --model swe-1.7 \

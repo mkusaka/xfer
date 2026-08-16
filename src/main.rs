@@ -79,6 +79,10 @@ struct HandoffOptions {
     /// Maximum handoff size as tokens or a model-context percentage (for example, 12.5%)
     #[arg(long, value_name = "TOKENS|PERCENT")]
     budget: Option<Budget>,
+
+    /// Persist the handoff in a temporary file and print its path
+    #[arg(long)]
+    write_tmpfile: bool,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -264,6 +268,15 @@ fn create_handoff(session: &Path, options: HandoffOptions) -> Result<()> {
     let counter = TokenCounter::load(options.model)?;
     let handoff = pack_handoff(&turns, task.trim(), budget, &counter)?;
 
+    emit_handoff(&handoff, options.write_tmpfile, io::stdout())
+}
+
+fn emit_handoff(handoff: &str, write_tmpfile: bool, mut stdout: impl Write) -> Result<()> {
+    if !write_tmpfile {
+        stdout.write_all(handoff.as_bytes())?;
+        return Ok(());
+    }
+
     let mut file = Builder::new().prefix("xfer-").suffix(".md").tempfile()?;
     file.write_all(handoff.as_bytes())?;
     file.flush()?;
@@ -271,7 +284,7 @@ fn create_handoff(session: &Path, options: HandoffOptions) -> Result<()> {
         .into_temp_path()
         .keep()
         .context("failed to persist the handoff file")?;
-    println!("{}", path.display());
+    writeln!(stdout, "{}", path.display())?;
 
     Ok(())
 }
@@ -946,5 +959,25 @@ mod tests {
                 assistant: Some("answer".into())
             }]
         );
+    }
+
+    #[test]
+    fn writes_handoff_to_standard_output_by_default() {
+        let mut output = Vec::new();
+
+        emit_handoff("handoff\n", false, &mut output).unwrap();
+
+        assert_eq!(output, b"handoff\n");
+    }
+
+    #[test]
+    fn writes_handoff_to_a_persistent_temporary_file_when_requested() {
+        let mut output = Vec::new();
+
+        emit_handoff("handoff\n", true, &mut output).unwrap();
+
+        let path = PathBuf::from(str::from_utf8(&output).unwrap().trim());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "handoff\n");
+        fs::remove_file(path).unwrap();
     }
 }

@@ -10,10 +10,11 @@ description: Prepare a token-bounded handoff from the current Codex or Claude se
 3. From a Codex or Claude Code shell tool, generate the handoff by inferring the current session and capture the path printed to standard output:
 
 ```bash
-handoff_path=$(printf '%s' "$DELEGATED_TASK" | xfer infer --model swe-1.7)
+handoff_path=$(printf '%s' "$DELEGATED_TASK" \
+  | xfer infer --model swe-1.7 --write-tmpfile)
 ```
 
-Use `xfer pack "$SESSION_JSONL"` only when the session file is explicitly known. Use `--task-file` for an existing task document and `--budget 12.5%` when the handoff should occupy a percentage of the selected model's context.
+Use `xfer pack "$SESSION_JSONL"` only when the session file is explicitly known. Use `--task-file` for an existing task document and `--budget 12.5%` when the handoff should occupy a percentage of the selected model's context. Omit `--write-tmpfile` when the receiving tool reads the generated Markdown directly from standard input.
 
 4. Pass the file through the receiving agent's prompt-file or equivalent input option rather than copying the Markdown through shell interpolation.
 
